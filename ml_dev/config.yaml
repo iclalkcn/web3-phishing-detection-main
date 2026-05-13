@@ -1,10 +1,11 @@
-data_file_path: "data/DS test_data_deduped.csv"
-BASE_MODEL: "distilbert-base-uncased-finetuned-sst-2-english"
+﻿BASE_MODEL: "distilbert-base-uncased-finetuned-sst-2-english"
+data_file_path: "data/web3_pure_dataset.csv"
 output_dir: "model_outputs"
-id2label: {1: "GENUINE", 0: "PHISHING"}
-label2id: {"GENUINE": 1, "PHISHING": 0}
+experiment_name: "distilbert-phishing-f1_deduped"
+lgbm_model_filename: "lgbm_model.pkl"
+id2label: {1: "PHISHING", 0: "GENUINE"}
+label2id: {"PHISHING": 1, "GENUINE": 0}
 pytorch_bin_filename: "pytorch_model.bin"
 model_onnx_filename: "model.onnx"
 eval_metric: "f1"
 model_metrics_filename: "model_metrics.txt"
-experiment_name: "distilbert-phishing-f1_deduped"
