@@ -1,77 +1,123 @@
 from typing import Any, Dict, Optional, Tuple
 
+import joblib
 import numpy as np
-import pandas as pd
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from lime.lime_text import LimeTextExplainer
+from transformers import AutoModel, AutoTokenizer
 
-# Define base model, model directory and model filename
-BASE_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
-model_dir = "models"
-model_bin_filename = "pytorch_model.bin"
+BASE_MODEL = "distilbert-base-uncased"
+MODEL_PATH = "models/lgbm_model.pkl"
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def load_model_and_tokenizer_for_app(
-    model_dir: str = model_dir,
-    model_filename: str = model_bin_filename,
+    model_path: str = MODEL_PATH,
     tokenizer_name: str = BASE_MODEL,
-) -> Tuple[Optional[AutoModelForSequenceClassification], Optional[AutoTokenizer]]:
-    """
-    Load model and tokenizer for the app.
-
-    Parameters:
-    model_dir (str): Directory where the model is stored.
-    model_filename (str): Filename of the model.
-    tokenizer_name (str): Name of the tokenizer.
-
-    Returns:
-    model: The loaded model.
-    tokenizer: The loaded tokenizer.
-    """
+) -> Tuple[Any, AutoTokenizer, AutoModel]:
     try:
-        # Load the model's state_dict using torch.load
-        model_state_dict = torch.load(f"{model_dir}/{model_filename}", map_location="cpu")
-        model = AutoModelForSequenceClassification.from_pretrained(
-            tokenizer_name, state_dict=model_state_dict
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        return model, tokenizer
+        classifier = joblib.load(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        bert_model = AutoModel.from_pretrained(tokenizer_name)
+        bert_model.to(device)
+        bert_model.eval()
+        return classifier, tokenizer, bert_model
     except Exception as e:
-        print(f"An error occurred while loading the model and tokenizer: {e}")
-        return None, None
+        print(f"An error occurred while loading the model/tokenizer: {e}")
+        return None, None, None
+
+
+def get_embedding(text: str, tokenizer: AutoTokenizer, bert_model: AutoModel) -> np.ndarray:
+    encoding = tokenizer(
+        text,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=128,
+    )
+
+    encoding = {k: v.to(device) for k, v in encoding.items()}
+
+    with torch.no_grad():
+        outputs = bert_model(**encoding)
+
+    embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+    return embedding
+
+
+def predict_proba_texts(texts, classifier, tokenizer, bert_model):
+    embeddings = []
+
+    for text in texts:
+        emb = get_embedding(text, tokenizer, bert_model)
+        embeddings.append(emb[0])
+
+    embeddings = np.array(embeddings)
+    probs = classifier.predict_proba(embeddings)
+
+    return probs
 
 
 def get_prediction(
-    model: AutoModelForSequenceClassification, tokenizer: AutoTokenizer, text: str
+    classifier, tokenizer: AutoTokenizer, bert_model: AutoModel, text: str
 ) -> Optional[Dict[str, Any]]:
-    """
-    Get prediction for the given text.
-
-    Parameters:
-    model: The model to use for prediction.
-    tokenizer: The tokenizer to use for prediction.
-    text (str): The text to predict.
-
-    Returns:
-    dict: A dictionary with the label and probability of the prediction.
-    """
     try:
-        # Tokenize the text
-        encoding = tokenizer(
-            text, return_tensors="pt", padding="max_length", truncation=True, max_length=512
-        )
-        encoding = {k: v.to(model.device) for k, v in encoding.items()}
-        # Get the outputs from the model
-        outputs = model(**encoding)
-        sigmoid = torch.nn.Sigmoid()
-        # Get the probabilities from the outputs
-        probs = sigmoid(outputs.logits.squeeze().cpu()).detach().numpy()
-        label = np.argmax(probs, axis=-1)
+        risky_keywords = [
+            "seed phrase",
+            "recovery phrase",
+            "private key",
+            "restore your wallet",
+            "verify your wallet",
+            "connect your wallet",
+            "claim airdrop",
+            "free airdrop",
+            "wallet validation",
+            "wallet verification",
+        ]
+
+        lower_text = text.lower()
+
+        for keyword in risky_keywords:
+            if keyword in lower_text:
+                return {
+                    "LABEL": "PHISHING",
+                    "probability": 99.9,
+                }
+
+        embedding = get_embedding(text, tokenizer, bert_model)
+        probs = classifier.predict_proba(embedding)[0]
+
+        predicted_class = int(np.argmax(probs))
+
+        label = "PHISHING" if predicted_class == 1 else "GENUINE"
+        probability = float(probs[predicted_class])
 
         return {
-            "LABEL": "GENUINE" if label == 1 else "PHISHING",
-            "probability": probs[1] if label == 1 else probs[0],
+            "LABEL": label,
+            "probability": round(probability * 100, 2),
         }
+
     except Exception as e:
-        print(f"An error occurred while getting the prediction: {e}")
+        print(f"An error occurred while getting prediction: {e}")
         return None
+
+
+def get_lime_explanation(
+    classifier, tokenizer: AutoTokenizer, bert_model: AutoModel, text: str
+):
+    try:
+        explainer = LimeTextExplainer(class_names=["GENUINE", "PHISHING"])
+
+        explanation = explainer.explain_instance(
+            text,
+            lambda texts: predict_proba_texts(texts, classifier, tokenizer, bert_model),
+            num_features=8,
+            num_samples=200,
+        )
+
+        return explanation.as_list()
+
+    except Exception as e:
+        print(f"An error occurred while explaining prediction: {e}")
+        return 
