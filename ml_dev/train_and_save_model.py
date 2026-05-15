@@ -6,6 +6,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import joblib
 import warnings
 import logging
+from sklearn.metrics import confusion_matrix
 from lightgbm import LGBMClassifier
 from sklearn.metrics import accuracy_score, f1_score
 from utilities import prepare_data, extract_embeddings, load_config
@@ -51,7 +52,15 @@ def main():
     print(f"Doğruluk (Accuracy) : %{accuracy_score(test_df['label'], y_pred)*100:.2f}")
     print(f"F1-Skoru            : {f1_score(test_df['label'], y_pred):.4f}")
     print("-"*30)
+    # Karşılaştırma matrisini hesapla
+    cm = confusion_matrix(test_df['label'], y_pred)
+    tn, fp, fn, tp = cm.ravel()
 
+    print("\n--- DETAYLI TEST SAYILARI ---")
+    print(f"Güvenli Mesaj Doğru Tahmin (TN): {tn}")
+    print(f"Hatalı Phishing Tahmini (FP)    : {fp}")
+    print(f"Hatalı Güvenli Tahmini (FN)    : {fn}")
+    print(f"Phishing Doğru Tahmin (TP)     : {tp}")
     # Modeli Kaydet (Hata verdiğimiz dump kısmını düzelttim)
     if not os.path.exists(full_output_dir):
         os.makedirs(full_output_dir)
